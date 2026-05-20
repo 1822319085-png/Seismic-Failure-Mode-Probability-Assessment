@@ -1,7 +1,7 @@
 # -*- coding: utf-8 -*-
 """
 app.py
-基于蒙特卡洛模拟的滨海高桩承台桥墩地震失效模式概率评估系统 (Web 网页版)
+基于蒙特卡洛模拟的滨海高桩承台桥墩地震失效模式概率评估系统 (纯 NumPy 零依赖版 + Excel导出)
 """
 
 import streamlit as st
@@ -10,7 +10,6 @@ import joblib
 import os
 import pandas as pd
 import io
-import tensorflow as tf
 
 # ================== 1. 网页全局配置 ==================
 st.set_page_config(
@@ -30,22 +29,15 @@ st.markdown("""
     </style>
 """, unsafe_allow_html=True)
 
-
-# ================== 2. 模型加载缓存 ==================
+# ================== 2. 模型加载缓存 (纯 NumPy) ==================
 @st.cache_resource
-def load_tf_model():
-    model_path = 'final_model.h5'
-    scaler_path = 'scaler.pkl'
-    if not os.path.exists(model_path) or not os.path.exists(scaler_path):
-        return None, None
-    # 强制不编译以加速加载并规避多线程报错
-    model = tf.keras.models.load_model(model_path, compile=False)
-    scaler = joblib.load(scaler_path)
-    return model, scaler
+def load_numpy_model():
+    assets_path = 'model_assets_numpy.pkl'
+    if not os.path.exists(assets_path):
+        return None
+    return joblib.load(assets_path)
 
-model, scaler = load_tf_model()
-label_names = ['FFF', 'PFF', 'PSF'] # 严格对应模型训练时的标签编码顺序
-
+assets = load_numpy_model()
 
 # ================== 3. 核心界面布局 ==================
 col_left, spacer, col_right = st.columns([6.8, 0.2, 3.0])
@@ -115,7 +107,7 @@ with col_right:
     
     predict_clicked = st.button("Calculate (Monte Carlo Simulation)", type="primary", use_container_width=True)
     
-    # 【新增】为下载按钮预留占位符，使其紧跟在 Predict 按钮下方
+    # 为下载按钮预留占位符
     download_placeholder = st.empty()
     st.write("")
 
@@ -134,15 +126,18 @@ with col_right:
         """
         st.markdown(html, unsafe_allow_html=True)
 
-    # 引入 Streamlit 的 Session State 来缓存概率和 Excel 文件流
     if 'mc_probs' not in st.session_state:
         st.session_state.mc_probs = [0.0, 0.0, 0.0]
     
     if predict_clicked:
-        if model is None or scaler is None:
-            st.error("⚠️ 未检测到 final_model.h5 或 scaler.pkl。请将文件放在同一目录下。")
+        if assets is None:
+            st.error("⚠️ 未检测到 model_assets_numpy.pkl。请将纯权重文件放在同一目录下。")
         else:
-            N_SAMPLES = 5000  # 与您提供的 GUI 脚本保持一致
+            weights = assets['weights']
+            scaler = assets['scaler']
+            label_names = assets['le'].classes_
+            
+            N_SAMPLES = 5000  
             samples = np.zeros((N_SAMPLES, 19))
             
             for i in range(19):
@@ -164,10 +159,16 @@ with col_right:
                 
                 samples[:, i] = np.clip(s, p_min, p_max)
             
-            # =============== 调用 TensorFlow 模型进行预测 ===============
-            X_scaled = scaler.transform(samples)
-            probs_matrix = model.predict(X_scaled, verbose=0)
-            predictions = np.argmax(probs_matrix, axis=1)
+            # =============== 纯 NumPy 极速矩阵前向传播 ===============
+            a = scaler.transform(samples)
+            for w, b in weights[:-1]:
+                z = np.dot(a, w) + b
+                a = np.maximum(0, z) # ReLU
+            w_out, b_out = weights[-1]
+            z_out = np.dot(a, w_out) + b_out
+            
+            # 获取每行的最大概率索引作为分类结果
+            predictions = np.argmax(z_out, axis=1)
             
             # 统计概率
             probs_dict = {}
@@ -175,7 +176,6 @@ with col_right:
                 count = np.sum(predictions == idx)
                 probs_dict[name] = count / N_SAMPLES
             
-            # 将新概率存入会话状态
             st.session_state.mc_probs = [probs_dict.get('PFF', 0.0), probs_dict.get('FFF', 0.0), probs_dict.get('PSF', 0.0)]
 
             # =============== 后台生成 Excel 文件数据 ===============
@@ -193,7 +193,6 @@ with col_right:
                 'Probability': [f"{probs_dict.get(lab, 0.0)*100:.2f}%" for lab in label_names]
             })
             
-            # 写入内存 (BytesIO)
             output = io.BytesIO()
             with pd.ExcelWriter(output, engine='openpyxl') as writer:
                 df_samples.to_excel(writer, sheet_name='Samples', index=False)
@@ -201,7 +200,6 @@ with col_right:
             
             st.session_state.excel_data = output.getvalue()
 
-    # 【新增】检查会话中是否存在 excel_data，若有，则在占位符处生成 Save 按钮
     if 'excel_data' in st.session_state:
         with download_placeholder.container():
             st.download_button(
@@ -209,18 +207,16 @@ with col_right:
                 data=st.session_state.excel_data,
                 file_name="Results.xlsx",
                 mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-                type="primary",   # 保持与 Predict 一致的颜色风格
+                type="primary",
                 use_container_width=True
             )
 
-    # 从会话缓存中调取最新概率绘制进度条
     probs = st.session_state.mc_probs
-    draw_progress_bar("PFF (Pier Flexure Failure)", probs[0] * 100, "#0078d4") # 蓝
-    draw_progress_bar("FFF (Foundation Flexure Failure)", probs[1] * 100, "#008000") # 绿
-    draw_progress_bar("PSF (Pier Shear Failure)", probs[2] * 100, "#d83b01") # 红
+    draw_progress_bar("PFF (Pier Flexure Failure)", probs[0] * 100, "#0078d4") 
+    draw_progress_bar("FFF (Foundation Flexure Failure)", probs[1] * 100, "#008000") 
+    draw_progress_bar("PSF (Pier Shear Failure)", probs[2] * 100, "#d83b01") 
 
     st.write("---")
-    
     st.markdown("<h5 style='color: #333; font-family: Arial; font-weight: bold; margin-bottom: 10px;'>Parameter Schematic</h5>", unsafe_allow_html=True)
     try:
         st.image("structure.png", use_container_width=True)

@@ -49,7 +49,7 @@ with col_left:
     cols = st.columns([1.0, 2.5, 1.8, 1.2, 1.0, 1.5])
     headers = ["Parameter", "Description", "Distribution", "Mean", "COV", "Range"]
     for i, header_name in enumerate(headers):
-        cols[i].markdown(f"<div style='text-align: center; color: #800020; font-size: 20px; font-weight: bold; padding-top: 15px;'>{header_name}</div>", unsafe_allow_html=True)
+        cols[i].markdown(f"<div style='text-align: center; color: #800020; font-size: 20px; font-weight: bold; margin-bottom: -15px;'>{header_name}</div>", unsafe_allow_html=True)
     
     st.markdown("<hr>", unsafe_allow_html=True)
 

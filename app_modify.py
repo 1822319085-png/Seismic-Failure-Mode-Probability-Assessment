@@ -44,7 +44,7 @@ col_left, spacer, col_right = st.columns([6.8, 0.2, 3.0])
 
 # ----------------- 左侧：19个参数 6列布局区 -----------------
 with col_left:
-    st.markdown("<h4 style='color: #333;'>Variable Parameters</h4>", unsafe_allow_html=True)
+    st.markdown("<h4 style='color: #333;'>Seismic Failure Mode Probability Assessment</h4>", unsafe_allow_html=True)
     
     cols = st.columns([1.0, 2.5, 1.8, 1.2, 1.0, 1.5])
     headers = ["Parameter", "Description", "Distribution", "Mean", "COV", "Range"]
